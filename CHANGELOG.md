@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.1] - 2026-11-21
+
+### Added
+- Built-in in-app display: `showInAppMessages(navigatorKey: …)` shows modal, banner (top or bottom), full screen and
+  card messages in your app's window, with the image, colours and buttons from the Console, and records impressions,
+  clicks and dismissals. `theme` and `builders` change the look or replace a type.
+- In-app messages follow your app's language (the Console's "Add language"): `message.contentFor(languageTag)`.
+- `onInAppButton`: which button of an in-app message was pressed, with its value (`custom`, `deep_link`).
+- Sessions for apps that stay in the tray: "App open" also fires when the window comes back from the tray, and a new
+  session (and "Session start") begins when the user returns after `sessionTimeout` (default 30 minutes).
+
+### Fixed
+- A second copy of the app on one computer still shows the in-app messages (it stays off the live connection).
+
 ## [0.1.0] - 2026-11-20
 
 First release: Abrova Push for Flutter apps on macOS, Windows and Linux.

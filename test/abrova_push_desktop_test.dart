@@ -243,7 +243,7 @@ void main() {
     test('highest priority that applies, once per run', () {
       final list = [m('a', priority: 1), m('b', priority: 5), m('c', trigger: 'on_event', event: 'opened_plans')];
       expect(pickInApp(list, InAppTrigger.appOpen, sessionCount: 1, now: now)?['id'], 'b');
-      expect(pickInApp(list, InAppTrigger.appOpen, sessionCount: 1, now: now, shownThisRun: {'b'})?['id'], 'a');
+      expect(pickInApp(list, InAppTrigger.appOpen, sessionCount: 1, now: now, shownCounts: {'b': 1})?['id'], 'a');
       expect(pickInApp(list, InAppTrigger.event, event: 'opened_plans', sessionCount: 1, now: now)?['id'], 'c');
     });
 
@@ -278,6 +278,22 @@ void main() {
       final a = Autostart(appName: 'Example', appIdentifier: 'ir.example/app', executable: '/x', home: '/home/u');
       expect(a.linuxDesktopPath, '/home/u/.config/autostart/ir.example_app.desktop');
       expect(a.macPlistPath, '/home/u/Library/LaunchAgents/ir.example_app.plist');
+    });
+  });
+
+  group('show at most', () {
+    final now = DateTime.utc(2026, 11, 21);
+    final list = [
+      {'id': 'x', 'triggerType': 'on_app_open', 'maxImpressions': 3},
+    ];
+    test('shows again on each app open until its own limit', () {
+      expect(pickInApp(list, InAppTrigger.appOpen, sessionCount: 1, now: now, shownCounts: {'x': 2})?['id'], 'x');
+      expect(pickInApp(list, InAppTrigger.appOpen, sessionCount: 1, now: now, shownCounts: {'x': 3}), isNull);
+    });
+    test('no limit set means once', () {
+      final once = [{'id': 'y', 'triggerType': 'on_app_open'}];
+      expect(pickInApp(once, InAppTrigger.appOpen, sessionCount: 1, now: now)?['id'], 'y');
+      expect(pickInApp(once, InAppTrigger.appOpen, sessionCount: 1, now: now, shownCounts: {'y': 1}), isNull);
     });
   });
 }

@@ -15,6 +15,7 @@ import 'config.dart';
 import 'connection.dart';
 import 'diagnostics.dart';
 import 'in_app.dart';
+import 'in_app_view.dart';
 import 'message.dart';
 import 'notifications.dart';
 import 'store.dart';
@@ -42,7 +43,11 @@ class AbrovaPushDesktop {
 
   static List<Map<String, dynamic>> _inApp = const [];
   static String? _inAppEtag;
-  static final Set<String> _inAppShown = {};
+  /// Times each in-app message was shown on this install (kept in the store).
+  static Map<String, int> get _inAppShown => {
+        for (final e in (_store?.get<Map>('inAppShown') ?? const {}).entries)
+          if (e.value is num) '${e.key}': (e.value as num).toInt(),
+      };
   static Timer? _signalTimer;
 
   static final _messages = StreamController<AbrovaPushMessage>.broadcast();
@@ -51,8 +56,17 @@ class AbrovaPushDesktop {
   static final _inAppReady = StreamController<AbrovaPushInAppMessage>.broadcast();
   static final _errors = StreamController<Object>.broadcast();
   static final _permission = StreamController<AbrovaPushNotificationPermission>.broadcast();
+  static final _inAppButtons = StreamController<AbrovaPushInAppButtonEvent>.broadcast();
+  static GlobalKey<NavigatorState>? _inAppNavigator;
+  static AbrovaPushInAppButtonTap? _inAppOnButtonTap;
+  static AbrovaPushInAppTheme _inAppTheme = const AbrovaPushInAppTheme();
+  static AbrovaPushInAppBuilders _inAppBuilders = const AbrovaPushInAppBuilders();
+  static OverlayEntry? _inAppEntry;
+  static String? _inAppOnScreen;
   static AbrovaPushNotificationPermission? _lastPermission;
   static AppLifecycleListener? _lifecycle;
+  static DateTime? _awaySince;
+  static bool _windowHidden = false;
   static AbrovaPushConnectionState _current = AbrovaPushConnectionState.disconnected;
 
   /// Every push this computer receives (silent ones too).
@@ -65,8 +79,73 @@ class AbrovaPushDesktop {
   static Stream<AbrovaPushConnectionState> get onConnectionState => _state.stream;
   static AbrovaPushConnectionState get connectionState => _current;
 
-  /// An in-app message to show now.
+  /// An in-app message to show now. With [showInAppMessages] the SDK shows it
+  /// (don't show it again yourself); this stream still tells you.
   static Stream<AbrovaPushInAppMessage> get onInAppMessage => _inAppReady.stream;
+
+  /// A button of an in-app message was pressed in the built-in display. `url`
+  /// buttons are already opened in the browser; route `deep_link` and handle
+  /// `custom` (its value) here, or in [showInAppMessages]'s `onButtonTap`.
+  static Stream<AbrovaPushInAppButtonEvent> get onInAppButton => _inAppButtons.stream;
+
+  /// Shows in-app messages with the built-in display, in your app's window and
+  /// language: modal, banner (top or bottom), full screen and card, with the
+  /// image, colours and buttons set in the Console. Clicks and dismissals are
+  /// recorded. Pass your MaterialApp's `navigatorKey`. [builders] replaces the
+  /// display of any type with your own widget.
+  static void showInAppMessages({
+    required GlobalKey<NavigatorState> navigatorKey,
+    AbrovaPushInAppButtonTap? onButtonTap,
+    AbrovaPushInAppTheme theme = const AbrovaPushInAppTheme(),
+    AbrovaPushInAppBuilders builders = const AbrovaPushInAppBuilders(),
+  }) {
+    _inAppNavigator = navigatorKey;
+    _inAppOnButtonTap = onButtonTap;
+    _inAppTheme = theme;
+    _inAppBuilders = builders;
+  }
+
+  static void _presentInApp(AbrovaPushInAppMessage m) {
+    final overlay = _inAppNavigator?.currentState?.overlay;
+    if (overlay == null) return;
+    _closeInApp();
+    late final OverlayEntry entry;
+    entry = OverlayEntry(
+      builder: (context) => buildInAppView(
+        context: context,
+        message: m,
+        theme: _inAppTheme,
+        builders: _inAppBuilders,
+        actions: AbrovaPushInAppActions(
+          onButtonTap: (b) {
+            unawaited(recordInApp(m, 'button_click', buttonId: b.id));
+            _closeInApp(entry);
+            final link = b.value;
+            if (b.action == 'url' && link != null && link.isNotEmpty) unawaited(openInAppLink(link));
+            if (!_inAppButtons.isClosed) _inAppButtons.add(AbrovaPushInAppButtonEvent(m, b));
+            final tap = _inAppOnButtonTap;
+            final ctx = _inAppNavigator?.currentContext;
+            if (tap != null && ctx != null && ctx.mounted) tap(ctx, m, b);
+          },
+          onDismiss: () {
+            unawaited(recordInApp(m, 'dismiss'));
+            _closeInApp(entry);
+          },
+        ),
+      ),
+    );
+    _inAppEntry = entry;
+    _inAppOnScreen = m.id;
+    overlay.insert(entry);
+  }
+
+  static void _closeInApp([OverlayEntry? only]) {
+    final e = _inAppEntry;
+    if (e == null || (only != null && !identical(e, only))) return;
+    _inAppEntry = null;
+    _inAppOnScreen = null;
+    if (e.mounted) e.remove();
+  }
 
   /// The notification permission changed (checked at [init] and whenever the app
   /// comes back to the front): for example the user turned notifications off in
@@ -139,8 +218,48 @@ class AbrovaPushDesktop {
     if (Platform.isMacOS && config.showNotifications) {
       // With askNotificationPermission, the first check runs once the user answered (above).
       if (!config.askNotificationPermission) unawaited(_checkPermission());
-      _lifecycle ??= AppLifecycleListener(onResume: () => unawaited(_checkPermission()));
     }
+    // Sessions and "app open" for an app that may run for days in the tray (see sessionTimeout).
+    _lifecycle ??= AppLifecycleListener(onStateChange: (s) {
+      if (s == AppLifecycleState.resumed) {
+        _cameBack();
+      } else {
+        _awaySince ??= DateTime.now();
+      }
+    });
+    DesktopBackground.instance.onVisibility = (visible) {
+      if (visible) {
+        _cameBack(fromHidden: true);
+      } else {
+        _windowHidden = true;
+        _awaySince ??= DateTime.now();
+      }
+    };
+  }
+
+  /// The user is back in the app: a new session after [AbrovaPushDesktopConfig.sessionTimeout] away, an "app open"
+  /// when the window came back from the tray. Focus moving between windows alone is neither.
+  static void _cameBack({bool fromHidden = false}) {
+    final since = _awaySince;
+    final wasHidden = _windowHidden || fromHidden;
+    _awaySince = null;
+    _windowHidden = false;
+    if (since == null && !wasHidden) return;
+    if (Platform.isMacOS) unawaited(_checkPermission());
+    final away = since == null ? Duration.zero : DateTime.now().difference(since);
+    if (away >= (_config?.sessionTimeout ?? const Duration(minutes: 30))) {
+      unawaited(_newSession());
+    } else if (wasHidden) {
+      unawaited(_fetchInApp(thenShow: InAppTrigger.appOpen));
+    }
+  }
+
+  static Future<void> _newSession() async {
+    _sessionCount++;
+    await _store?.set('sessions', _sessionCount);
+    _log('session $_sessionCount');
+    // One message at a time: the app-open one only when no session-start one showed.
+    if (!await _fetchInApp(thenShow: InAppTrigger.sessionStart)) await _fetchInApp(thenShow: InAppTrigger.appOpen);
   }
 
   static Future<void> _checkPermission() async {
@@ -225,8 +344,10 @@ class AbrovaPushDesktop {
     }
     await store.set('registration', reg.toJson());
     if (!await store.claimInstall()) {
-      // Another copy of this app runs on this computer and keeps the connection.
-      _log('registered $deviceId; another copy of the app is connected, this one stays offline');
+      // Another copy of this app runs on this computer and keeps the connection (and shows the notifications). This
+      // copy only loads the in-app messages when it opens, so a release note reaches whichever window the user uses.
+      _log('registered $deviceId; another copy of the app is connected, this one only loads in-app messages');
+      unawaited(_fetchInApp(thenShow: InAppTrigger.appOpen));
       return;
     }
     _connect(reg);
@@ -397,14 +518,16 @@ class AbrovaPushDesktop {
   /// Shows the in-app message set to your custom event [name], if any.
   static Future<void> triggerInAppEvent(String name) => _fetchInApp(thenShow: InAppTrigger.event, event: name);
 
-  static Future<void> _fetchInApp({InAppTrigger? thenShow, String? event}) async {
+  /// True when a message was picked to show.
+  static Future<bool> _fetchInApp({InAppTrigger? thenShow, String? event}) async {
     final id = deviceId;
-    if (_api == null || id == null) return;
+    if (_api == null || id == null) return false;
     try {
       final r = await _api!.fetchInApp({
         'deviceId': id,
         'sessionCount': _sessionCount,
-        'locale': PlatformDispatcher.instance.locale.toLanguageTag(),
+        // No locale: the answer keeps the default text and every translation, and the display picks the APP's
+        // language (which may differ from the computer's).
       }, etag: _inAppEtag);
       if (r != null) {
         _inApp = r.messages;
@@ -413,16 +536,27 @@ class AbrovaPushDesktop {
     } catch (e) {
       _error(e);
     }
-    if (thenShow == null) return;
-    final pick = pickInApp(_inApp, thenShow, event: event, sessionCount: _sessionCount, shownThisRun: _inAppShown);
-    if (pick == null) return;
-    _inAppShown.add('${pick['id']}');
+    if (thenShow == null) return false;
+    final shown = _inAppShown;
+    final pick = pickInApp(_inApp, thenShow, event: event, sessionCount: _sessionCount, shownCounts: shown);
+    if (pick == null) return false;
+    final pickId = '${pick['id']}';
+    if (_inAppEntry != null && _inAppOnScreen == pickId) return false; // already on screen
+    // Count it now (kept to the messages still in the list, so the map can't grow for ever).
+    final ids = {for (final m in _inApp) '${m['id']}'};
+    await _store?.set('inAppShown', {
+      for (final e in shown.entries)
+        if (ids.contains(e.key)) e.key: e.value,
+      pickId: (shown[pickId] ?? 0) + 1,
+    });
     final delay = Duration(seconds: (pick['delaySeconds'] as num?)?.toInt() ?? 0);
     Future.delayed(delay, () {
       final msg = AbrovaPushInAppMessage.fromJson(pick);
+      if (_inAppNavigator != null) _presentInApp(msg);
       if (!_inAppReady.isClosed) _inAppReady.add(msg);
       unawaited(_inAppAction(msg.id, 'impression'));
     });
+    return true;
   }
 
   /// Tell Abrova what the user did with an in-app message: `click`, `dismiss`

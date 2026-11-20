@@ -15,6 +15,9 @@ class DesktopBackground with TrayListener, WindowListener {
 
   bool _tray = false;
 
+  /// Called when the window is hidden to the tray (false) or shown again (true).
+  void Function(bool visible)? onVisibility;
+
   /// Whether [enable] ran (window_manager is set up only then).
   bool get enabled => _enabled;
   bool _enabled = false;
@@ -83,6 +86,7 @@ class DesktopBackground with TrayListener, WindowListener {
     if (!_enabled) return;
     await windowManager.show();
     await windowManager.focus();
+    onVisibility?.call(true);
   }
 
   /// Sends the window to the tray (e.g. when started hidden). Does nothing
@@ -90,12 +94,14 @@ class DesktopBackground with TrayListener, WindowListener {
   Future<void> hideWindow() async {
     if (!_enabled) return;
     await windowManager.hide();
+    onVisibility?.call(false);
   }
 
   @override
   void onWindowClose() async {
     if (_tray && await windowManager.isPreventClose()) {
       await windowManager.hide();
+      onVisibility?.call(false);
     } else {
       await windowManager.destroy();
     }

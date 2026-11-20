@@ -1,6 +1,6 @@
 name: abrova_push_desktop
 description: Push notifications and in-app messages for Flutter apps on macOS, Windows and Linux, with an optional tray and start with the computer. No Firebase.
-version: 0.1.0
+version: 0.1.1
 homepage: https://abrova.ir/cloud/abrova-push
 repository: https://github.com/Abrova-co/abrova_push_desktop
 publish_to: https://center.abrova.ir/api/packages/abrova/pub
@@ -27,6 +27,8 @@ dependencies:
   window_manager: ^0.5.1
 
 dev_dependencies:
+  flutter_localizations:
+    sdk: flutter
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0

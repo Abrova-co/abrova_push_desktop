@@ -21,7 +21,7 @@ The package is published on [Abrova Center](https://center.abrova.ir). Add it to
 dependencies:
   abrova_push_desktop:
     hosted: https://center.abrova.ir/api/packages/abrova/pub
-    version: ^0.1.0
+    version: ^0.1.1
 ```
 
 Requires Flutter 3.44 or newer.
@@ -186,13 +186,31 @@ starts, or on your own event, with the same rules as on phones. When you publish
 apps show it within a minute.
 
 ```dart
-AbrovaPushDesktop.onInAppMessage.listen((m) {
-  // Show m.title, m.body, m.imageUrl and m.buttons in your own dialog or banner, then:
-  AbrovaPushDesktop.recordInApp(m, 'button_click', buttonId: m.buttons.first.id);
-});
+final navigatorKey = GlobalKey<NavigatorState>(); // the one your MaterialApp uses
+
+AbrovaPushDesktop.showInAppMessages(
+  navigatorKey: navigatorKey,
+  onButtonTap: (context, message, button) {
+    // url buttons open in the browser by themselves; route deep links and handle custom values here
+    if (button.action == 'deep_link') Navigator.of(context).pushNamed(button.value!);
+  },
+);
 
 await AbrovaPushDesktop.triggerInAppEvent('opened_settings');
 ```
+
+The SDK shows each message in your app's window and **in your app's language** (the Console's "Add language"): modal, banner (top or bottom), full screen or card, with the image, colours and up to two buttons from the Console, and records impressions, clicks and dismissals. Change the look with `theme: AbrovaPushInAppTheme(...)`, or draw a type yourself with `builders: AbrovaPushInAppBuilders(modal: ...)`.
+
+To draw every message yourself instead, skip `showInAppMessages`, listen to `onInAppMessage`, pick the text with `message.contentFor(languageTag)` and call `recordInApp(message, 'button_click', buttonId: ...)` / `'dismiss'`.
+
+On computers an app may run for days in the tray, so the SDK decides what "opening" means:
+
+| Console trigger | Fires on a computer when |
+|---|---|
+| App open | the app starts, or its window comes back from the tray (also by a notification click) |
+| Session start | the app starts, or the user comes back after `sessionTimeout` away (default 30 minutes: window hidden, minimised or behind other apps) |
+
+Switching between windows alone is neither. `minSessionCount` counts these sessions.
 
 ## Users and topics
 

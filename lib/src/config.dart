@@ -20,6 +20,7 @@ class AbrovaPushDesktopConfig {
     this.apiUrl = defaultApiUrl,
     this.debug = false,
     this.sendDiagnostics = true,
+    this.sessionTimeout = const Duration(minutes: 30),
   });
 
   static const String defaultApiUrl = 'https://push-api.abrova.ir';
@@ -75,4 +76,11 @@ class AbrovaPushDesktopConfig {
   /// phone SDKs send; counts and fixed reason words only, never a message,
   /// user or device detail). False: nothing is counted, kept or sent.
   final bool sendDiagnostics;
+
+  /// A new session starts when the user comes back to the app after at least
+  /// this long away (window hidden in the tray, minimised or behind other apps),
+  /// as well as at every start. In-app "Session start" messages and
+  /// `minSessionCount` use it; "App open" also fires when the window comes back
+  /// from the tray.
+  final Duration sessionTimeout;
 }
