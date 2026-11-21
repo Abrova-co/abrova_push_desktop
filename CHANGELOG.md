@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.2] - 2026-11-22
+### Added
+- macOS: the SDK tells Abrova when notifications are turned off or on, so the Console shows the computer as
+  "Notifications off" and says why its messages were not seen. Windows and Linux report nothing (no such setting).
+
 ## [0.1.1] - 2026-11-21
 
 ### Added

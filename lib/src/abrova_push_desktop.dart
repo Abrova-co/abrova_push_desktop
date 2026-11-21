@@ -191,6 +191,10 @@ class AbrovaPushDesktop {
       ..onAuthError = (e) {
         _log('auth error ${e.code}');
         _onAuthError?.call(e);
+      }
+      ..onNotificationsFieldRefused = () {
+        _log('server does not take notificationsEnabled yet; registering without it');
+        unawaited(_store?.set('notificationsFieldRefusedAt', DateTime.now().millisecondsSinceEpoch));
       };
     final info = await PackageInfo.fromPlatform();
     _appIdentifier = (config.appIdentifier?.trim().isNotEmpty ?? false)
@@ -266,9 +270,38 @@ class AbrovaPushDesktop {
     try {
       final now = await notificationPermission();
       if (now == _lastPermission) return;
+      final before = _lastPermission;
       _lastPermission = now;
       if (!_permission.isClosed) _permission.add(now);
+      // Tell the server too (the Console shows why messages were not seen). The first check's value goes with
+      // the register at start.
+      final body = _lastRegisterBody;
+      if (before != null && body != null && _api != null) {
+        final field = await _notificationsEnabledField();
+        final next = Map.of(body)..remove(notificationsEnabledField);
+        if (field != null) next[notificationsEnabledField] = field;
+        _lastRegisterBody = next;
+        try {
+          await _api!.register(next);
+        } catch (e) {
+          _count(PushErrorCodes.registrationFailed, e);
+        }
+      }
     } catch (_) {}
+  }
+
+  /// The last register body, re-sent with the new value when notifications are turned on or off.
+  static Map<String, dynamic>? _lastRegisterBody;
+
+  /// notificationsEnabled for the register: macOS says it; Windows and Linux can't tell (left out = unknown).
+  /// Left out for a day after a server from before this field refused it.
+  static Future<bool?> _notificationsEnabledField() async {
+    if (!Platform.isMacOS) return null;
+    final refusedAt = (_store?.get<num>('notificationsFieldRefusedAt'))?.toInt() ?? 0;
+    if (refusedAt > 0 && DateTime.now().millisecondsSinceEpoch - refusedAt < const Duration(days: 1).inMilliseconds) {
+      return null;
+    }
+    return (await notificationPermission()) == AbrovaPushNotificationPermission.allowed;
   }
 
   /// Opens the system's notification settings for this app, where the user can
@@ -320,7 +353,9 @@ class AbrovaPushDesktop {
       ...await _deviceFields(),
       'sdkName': abrovaPushDesktopSdkName,
       'sdkVersion': abrovaPushDesktopVersion,
+      notificationsEnabledField: ?await _notificationsEnabledField(),
     };
+    _lastRegisterBody = body;
     Registration reg;
     try {
       reg = await api.register(body);

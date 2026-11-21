@@ -92,6 +92,12 @@ class Registration {
   }
 }
 
+/// Register field: whether this computer shows the app's notifications (macOS only; unknown elsewhere).
+const String notificationsEnabledField = 'notificationsEnabled';
+
+/// A validation answer that names [field] as unknown ("property notificationsEnabled should not exist").
+bool refusesField(String body, String field) => body.contains(field) && body.contains('should not exist');
+
 class PushApiException implements Exception {
   PushApiException(this.status, this.message, {this.code, String? reason})
       : reason = reason ?? (status != null && status >= 400 && status <= 599 ? 'http$status' : 'other');
@@ -277,8 +283,19 @@ class PushApi {
     return j is Map ? Map<String, dynamic>.from(j) : <String, dynamic>{};
   }
 
-  Future<Registration> register(Map<String, dynamic> body) async =>
-      Registration.parse(_json(await _send('POST', '/devices/register', body: body)));
+  /// Called when the server refused [notificationsEnabledField] (a server from before it).
+  void Function()? onNotificationsFieldRefused;
+
+  /// POST /devices/register. A server from before notificationsEnabled answers 400 "should not exist": the same
+  /// registration goes again without it, so the app keeps working whichever is deployed first.
+  Future<Registration> register(Map<String, dynamic> body) async {
+    final r = await _send('POST', '/devices/register', body: body);
+    if (r.statusCode == 400 && body.containsKey(notificationsEnabledField) && refusesField(r.body, notificationsEnabledField)) {
+      onNotificationsFieldRefused?.call();
+      return register(Map.of(body)..remove(notificationsEnabledField));
+    }
+    return Registration.parse(_json(r));
+  }
 
   Future<String> refreshToken(String deviceId) async {
     final j = _json(await _send('POST', '/devices/${Uri.encodeComponent(deviceId)}/mqtt-token/refresh'));

@@ -21,7 +21,7 @@ The package is published on [Abrova Center](https://center.abrova.ir). Add it to
 dependencies:
   abrova_push_desktop:
     hosted: https://center.abrova.ir/api/packages/abrova/pub
-    version: ^0.1.1
+    version: ^0.1.2
 ```
 
 Requires Flutter 3.44 or newer.
