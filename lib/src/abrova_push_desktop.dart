@@ -7,6 +7,7 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:window_manager/window_manager.dart';
 
 import 'api.dart';
 import 'auth_error.dart';
@@ -144,8 +145,14 @@ class AbrovaPushDesktop {
     if (e == null || (only != null && !identical(e, only))) return;
     _inAppEntry = null;
     _inAppOnScreen = null;
-    if (e.mounted) e.remove();
+    // Also when it is not drawn yet (inserted this frame): only checking `mounted` left that one on screen for good,
+    // under the next message, with a close button that no longer closed anything.
+    e.remove();
   }
+
+  /// Shows [m] as an in-app message now, as a fetch would (tests).
+  @visibleForTesting
+  static void debugPresentInApp(AbrovaPushInAppMessage m) => _presentInApp(m);
 
   /// The notification permission changed (checked at [init] and whenever the app
   /// comes back to the front): for example the user turned notifications off in
@@ -503,13 +510,24 @@ class AbrovaPushDesktop {
     if (dupe) return;
     if (!_messages.isClosed) _messages.add(m);
     final cfg = _config!;
-    final focused = WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
-    if (!m.silent && cfg.showNotifications && (cfg.showNotificationsWhileFocused || !focused)) {
+    if (!m.silent && cfg.showNotifications && (cfg.showNotificationsWhileFocused || !await _windowInFront())) {
       try {
         await _notifications?.show(m);
       } catch (e) {
         _error(e);
       }
+    }
+  }
+
+  /// Whether the user is looking at the app's window now. The app being "resumed" is not enough: on macOS a window
+  /// hidden in the tray (background mode) leaves the app resumed, and a push then showed nothing.
+  static Future<bool> _windowInFront() async {
+    if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) return false;
+    if (!DesktopBackground.instance.enabled) return true;
+    try {
+      return await windowManager.isVisible() && await windowManager.isFocused();
+    } catch (_) {
+      return true;
     }
   }
 
@@ -586,6 +604,8 @@ class AbrovaPushDesktop {
     });
     final delay = Duration(seconds: (pick['delaySeconds'] as num?)?.toInt() ?? 0);
     Future.delayed(delay, () {
+      // Two fetches close together (session start, app open) can both pick it before either shows it.
+      if (_inAppEntry != null && _inAppOnScreen == pickId) return;
       final msg = AbrovaPushInAppMessage.fromJson(pick);
       if (_inAppNavigator != null) _presentInApp(msg);
       if (!_inAppReady.isClosed) _inAppReady.add(msg);

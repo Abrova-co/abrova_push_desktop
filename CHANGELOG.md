@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3] - 2026-11-22
+### Fixed
+- macOS: with `showNotificationsWhileFocused: false`, a push now shows a notification when the window is closed to
+  the tray (background mode). The hidden window counted as "in front" and the notification was skipped.
+- An in-app message that two triggers picked at almost the same time (for example "Session start" and "App open")
+  showed twice, stacked, with a darker page behind it, and its close button did nothing. It now shows once and closes.
+
 ## [0.1.2] - 2026-11-22
 ### Added
 - macOS: the SDK tells Abrova when notifications are turned off or on, so the Console shows the computer as
